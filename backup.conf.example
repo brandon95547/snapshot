@@ -1,0 +1,54 @@
+# backup.conf — copy to backup.conf and edit for the production box.
+# Every value here has a sane default in backup.sh; only override what differs.
+# This file is sourced by backup.sh, so use shell syntax (KEY="value").
+
+# --- What to back up -------------------------------------------------------
+
+# Root of the deployed site code. On prod this is /var/www; on the dev box the
+# apps live under /home/crimson/sites. The script backs up this whole tree
+# (minus the EXCLUDES below).
+WWW_DIR="/var/www"
+
+# The two project subdirectories inside WWW_DIR. Used to locate each app's
+# .env, docker-compose files, and to name the DB source. Adjust if your prod
+# layout differs (e.g. the api lives elsewhere).
+PHANSORA_DIR="${WWW_DIR}/phansora"
+PHANSORA_API_DIR="${WWW_DIR}/phansora-api"
+
+# systemd unit files to grab (space separated, no path — they're looked up in
+# /etc/systemd/system and its drop-in dirs).
+SYSTEMD_UNITS="phansora.service phansora-api.service"
+
+# nginx and TLS certificate roots.
+NGINX_DIR="/etc/nginx"
+LETSENCRYPT_DIR="/etc/letsencrypt"
+
+# --- Database --------------------------------------------------------------
+
+# Name of the running Postgres container (see docker-compose.prod.yml:
+# container_name: phansora_postgres). The DB lives in a Docker named volume,
+# NOT on the filesystem, so a plain tar of /var/www will silently miss it.
+# We take a logical pg_dump instead.
+PG_CONTAINER="phansora_postgres"
+
+# DB creds. Leave blank to auto-read DB_USER / DB_NAME from PHANSORA_DIR/.env.
+DB_USER=""
+DB_NAME=""
+
+# --- Docker named volumes to snapshot (raw tar) ----------------------------
+# Space-separated substrings; any docker volume whose name contains one of
+# these is archived. Covers the phansora-api "media" volume. postgres_data is
+# handled by pg_dump above, so it's intentionally not listed here.
+VOLUME_MATCH="media"
+
+# --- Output & retention ----------------------------------------------------
+
+# Where completed backup archives are written.
+BACKUP_ROOT="/var/backups/phansora"
+
+# Delete backups older than this many days (0 = keep everything).
+RETENTION_DAYS=14
+
+# Paths (relative to each dir being tarred) excluded from the code backup.
+# These are large and rebuildable; the source of truth is git + package files.
+EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt"
