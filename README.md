@@ -1,4 +1,4 @@
-# backup-cron
+# snapshot backup system
 
 Full-box backup for the Phansora stack, built for **migrating to a new
 production server**. One script snapshots everything needed to stand the site
