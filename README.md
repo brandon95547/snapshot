@@ -56,51 +56,51 @@ scp /var/backups/phansora/phansora-backup-*.tar.gz  newbox:/var/backups/phansora
 
 ## Restore on the new box
 
+`restore.sh` is the inverse of `backup.sh` — it consumes an archive and rebuilds
+the box. Copy an archive over, then:
+
 ```bash
-# 0. Install docker + docker compose + nginx + certbot first.
+# 0. Install docker + docker compose + nginx + certbot on the new box first.
+#    Copy backup.conf over too (restore.sh reads the same file for paths).
 
-# 1. Unpack the backup.
-cd /var/backups/phansora
-tar xzf phansora-backup-<host>-<stamp>.tar.gz
-cd phansora-backup-<host>-<stamp>
-sha256sum -c SHA256SUMS          # verify integrity
+# 1. See exactly what it will do — changes nothing:
+sudo ./restore.sh -f /var/backups/phansora/phansora-backup-<host>-<stamp>.tar.gz --dry-run
 
-# 2. Restore code.
-mkdir -p /var/www && tar xzf www.tar.gz -C /var/www --strip-components=1
-#   (adjust --strip-components / target so phansora + phansora-api land in /var/www)
-#   Then reinstall deps that were excluded:
-#     cd /var/www/phansora     && npm ci
-#     cd /var/www/phansora-api && python -m venv .venv && .venv/bin/pip install -r requirements.txt
-
-# 3. nginx + TLS.
-tar xzf nginx.tar.gz       -C /etc --strip-components=1   # -> /etc/nginx
-tar xzf letsencrypt.tar.gz -C /etc --strip-components=1   # -> /etc/letsencrypt
-nginx -t && systemctl reload nginx
-
-# 4. Bring up the stack so Postgres exists, then load the DB.
-cd /var/www/phansora
-docker compose -f docker-compose.prod.yml up -d db
-#   wait a few seconds for Postgres to accept connections, then:
-gunzip -c /var/backups/phansora/.../database.sql.gz \
-  | docker exec -i phansora_postgres psql -U "$DB_USER" -d "$DB_NAME"
-docker compose -f docker-compose.prod.yml up -d       # full stack
-cd /var/www/phansora-api && docker compose up -d
-
-# 5. Restore any docker named volumes (media).
-docker volume create <volume-name>
-docker run --rm -v <volume-name>:/data -v "$PWD":/backup alpine \
-  tar xzf /backup/volume-<volume-name>.tar.gz -C /data
-
-# 6. systemd units.
-cp systemd/*.service /etc/systemd/system/
-[ -d systemd/*.service.d ] && cp -r systemd/*.service.d /etc/systemd/system/ 2>/dev/null
-systemctl daemon-reload
-#   re-enable per systemd/enabled-state.txt, e.g.:
-systemctl enable --now phansora.service phansora-api.service
+# 2. Do it (prompts before overwriting; type 'restore' to confirm):
+sudo ./restore.sh -f /var/backups/phansora/phansora-backup-<host>-<stamp>.tar.gz
 ```
 
-Exact `--strip-components` values depend on your prod layout — check
-`MANIFEST.txt` and the archive contents before extracting over live paths.
+With no `-f`, it restores the **newest** archive in `$BACKUP_ROOT`. In order it:
+verifies `SHA256SUMS` → restores code to `$WWW_DIR` → restores nginx + certs →
+restores docker volumes → brings up Postgres and loads the DB dump → installs
+the systemd units and re-enables the ones that were enabled on the old box.
+
+Useful flags:
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Print every action, change nothing. **Run this first.** |
+| `--yes` | Skip the confirmation prompt (automation). |
+| `--stack` | After restore, `docker compose up -d` both apps. Omit to start them via systemd instead. |
+| `--with-cron` | Also restore the captured crontab (off by default). |
+| `--skip-db` / `--skip-volumes` / `--skip-certs` | Restore selectively. |
+
+**After it finishes** (it prints these too):
+
+```bash
+# reinstall the deps that were excluded from the backup to keep it small
+cd /var/www/phansora     && npm ci
+cd /var/www/phansora-api && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+nginx -t && systemctl reload nginx
+systemctl start phansora.service phansora-api.service   # or use --stack during restore
+# point DNS at the new box, then verify https://www.phansora.com
+```
+
+The restore is **destructive** (it overwrites `/var/www`, `/etc/nginx`,
+`/etc/letsencrypt` and loads the DB) and refuses to run until you confirm or
+pass `--yes`. It's *fail-soft* like the backup and exits non-zero if anything
+warned.
 
 ## Notes / caveats
 

@@ -101,7 +101,8 @@ if [ -d "$WWW_DIR" ]; then
         -C "$(dirname "$WWW_DIR")" "$(basename "$WWW_DIR")"; then
     ok "archived $WWW_DIR -> www.tar.gz ($(du -h "${WORK}/www.tar.gz" | cut -f1))"
     # Explicitly confirm the .env secret files came along — easy to lose these.
-    for envf in "${PHANSORA_DIR}/.env" "${PHANSORA_API_DIR}/.env" "${PHANSORA_API_DIR}/.env.production"; do
+    # Both apps use a single .env (not .env.production / .env.local).
+    for envf in "${PHANSORA_DIR}/.env" "${PHANSORA_API_DIR}/.env"; do
       [ -f "$envf" ] && ok "  captured secrets: $envf" || warn "  expected env file missing: $envf"
     done
   else
