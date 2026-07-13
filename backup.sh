@@ -52,6 +52,11 @@ VOLUME_MATCH="media"
 BACKUP_ROOT="/var/backups/phansora"
 RETENTION_DAYS=14
 EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt"
+# Overwrite mode: when 1, every run writes to ONE fixed archive (no timestamp),
+# replacing the previous one in place — so hourly backups never accumulate.
+# RETENTION_DAYS is irrelevant in this mode (there is only ever one file).
+SINGLE_FILE=0
+SINGLE_FILE_NAME="phansora-backup-latest"
 
 if [ -f "$CONF_FILE" ]; then
   # shellcheck disable=SC1090
@@ -69,14 +74,35 @@ PHANSORA_API_DIR="${PHANSORA_API_DIR:-${WWW_DIR}/phansora-api}"
 # ---------------------------------------------------------------------------
 STAMP="$(date +%Y%m%d-%H%M%S)"
 HOSTNAME_S="$(hostname -s 2>/dev/null || echo host)"
-NAME="phansora-backup-${HOSTNAME_S}-${STAMP}"
+if [ "${SINGLE_FILE:-0}" -eq 1 ]; then
+  # Fixed name → one archive + one log that get overwritten every run.
+  NAME="$SINGLE_FILE_NAME"
+  LOG="${BACKUP_ROOT}/${NAME}.log"
+else
+  NAME="phansora-backup-${HOSTNAME_S}-${STAMP}"
+  LOG="${BACKUP_ROOT}/${NAME}.log"
+fi
 WORK="${BACKUP_ROOT}/.staging/${NAME}"
-LOG="${BACKUP_ROOT}/${NAME}.log"
 WARN_COUNT=0
 
+mkdir -p "$BACKUP_ROOT" || { echo "FATAL: cannot create $BACKUP_ROOT (are you root?)" >&2; exit 1; }
+
+# Prevent overlapping runs (an hourly cron can fire before a slow run finishes).
+# Non-blocking: if another backup holds the lock, exit quietly with success.
+LOCK_FILE="${BACKUP_ROOT}/.backup.lock"
+exec 9>"$LOCK_FILE" 2>/dev/null || true
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+  echo "note: another backup is already running (lock: $LOCK_FILE) — skipping this run" >&2
+  exit 0
+fi
+
+# In single-file mode start the staging dir and log fresh each run.
+[ "${SINGLE_FILE:-0}" -eq 1 ] && rm -rf "$WORK"
 mkdir -p "$WORK" || { echo "FATAL: cannot create $WORK (are you root?)" >&2; exit 1; }
 
-# Tee all output to the log from here on.
+# Tee all output to the log. Overwrite (not append) in single-file mode so the
+# log doesn't grow without bound; append in timestamped mode (one log per run).
+[ "${SINGLE_FILE:-0}" -eq 1 ] && : > "$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
 log()  { echo "[$(date +%H:%M:%S)] $*"; }
@@ -244,6 +270,9 @@ log "--- [8/8] Environment inventory"
   echo; echo "## running containers"; docker ps 2>/dev/null
   echo; echo "## docker volumes"; docker volume ls 2>/dev/null
   echo; echo "## docker images"; docker images 2>/dev/null
+  echo; echo "## nginx"; command -v nginx >/dev/null 2>&1 && nginx -v 2>&1 || echo "nginx NOT installed"
+  echo; echo "## firewall (firewalld)"; command -v firewall-cmd >/dev/null 2>&1 && { firewall-cmd --state 2>&1; firewall-cmd --list-all 2>/dev/null; } || echo "firewalld not present"
+  echo; echo "## firewall (ufw)"; command -v ufw >/dev/null 2>&1 && ufw status verbose 2>/dev/null || echo "ufw not present"
   echo; echo "## nginx -T (effective config)"; nginx -T 2>/dev/null | head -200
 } > "${WORK}/inventory.txt" 2>&1
 ok "wrote inventory.txt"
@@ -281,16 +310,43 @@ EOF
 ok "wrote MANIFEST.txt"
 
 # Roll the staging dir into one archive next to the log, then clean staging.
+# Write to a .tmp first and atomically mv into place, so a crash mid-write (or a
+# dashboard download in flight) never sees a half-written archive.
 FINAL="${BACKUP_ROOT}/${NAME}.tar.gz"
-if tar czf "$FINAL" -C "$(dirname "$WORK")" "$(basename "$WORK")"; then
+FINAL_TMP="${FINAL}.tmp.$$"
+if tar czf "$FINAL_TMP" -C "$(dirname "$WORK")" "$(basename "$WORK")" && mv -f "$FINAL_TMP" "$FINAL"; then
   ok "final archive: $FINAL ($(du -h "$FINAL" | cut -f1))"
   rm -rf "$WORK"
 else
   warn "could not roll up staging dir; leaving it at $WORK"
+  rm -f "$FINAL_TMP"
 fi
 
-# Retention prune.
-if [ "${RETENTION_DAYS:-0}" -gt 0 ]; then
+# Metadata sidecar (read by the phansora admin dashboard "Storage → Backup"
+# panel to show last-run time / status without needing to read the archive).
+FINAL_SHA=""
+[ -f "$FINAL" ] && command -v sha256sum >/dev/null 2>&1 && FINAL_SHA="$(sha256sum "$FINAL" | cut -d' ' -f1)"
+FINAL_BYTES="$([ -f "$FINAL" ] && stat -c %s "$FINAL" 2>/dev/null || echo 0)"
+BACKUP_STATUS="$([ "$WARN_COUNT" -eq 0 ] && echo ok || echo warn)"
+cat > "${BACKUP_ROOT}/${NAME}.json" <<EOF
+{
+  "name": "${NAME}",
+  "file": "${NAME}.tar.gz",
+  "host": "$(hostname -f 2>/dev/null || hostname)",
+  "created": "$(date --iso-8601=seconds 2>/dev/null || date)",
+  "created_epoch": $(date +%s),
+  "size_bytes": ${FINAL_BYTES},
+  "warnings": ${WARN_COUNT},
+  "status": "${BACKUP_STATUS}",
+  "sha256": "${FINAL_SHA}",
+  "single_file": ${SINGLE_FILE:-0}
+}
+EOF
+ok "wrote ${NAME}.json (status=${BACKUP_STATUS})"
+
+# Retention prune — only meaningful for timestamped mode. In single-file mode
+# there is exactly one archive, so there is nothing to prune.
+if [ "${SINGLE_FILE:-0}" -ne 1 ] && [ "${RETENTION_DAYS:-0}" -gt 0 ]; then
   log "pruning backups older than ${RETENTION_DAYS} days in $BACKUP_ROOT"
   find "$BACKUP_ROOT" -maxdepth 1 -name 'phansora-backup-*.tar.gz' -type f -mtime +"$RETENTION_DAYS" -print -delete 2>/dev/null || true
   find "$BACKUP_ROOT" -maxdepth 1 -name 'phansora-backup-*.log'    -type f -mtime +"$RETENTION_DAYS" -print -delete 2>/dev/null || true

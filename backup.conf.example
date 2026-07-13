@@ -47,7 +47,16 @@ VOLUME_MATCH="media"
 BACKUP_ROOT="/var/backups/phansora"
 
 # Delete backups older than this many days (0 = keep everything).
+# Ignored when SINGLE_FILE=1 (there is only ever one archive).
 RETENTION_DAYS=14
+
+# Overwrite mode. Set to 1 to write ONE fixed archive that is replaced in place
+# every run, instead of a new timestamped file each time. Use this for a
+# frequent (e.g. hourly) cron where you only want the newest snapshot and don't
+# want old backups piling up on disk. The archive is named "<SINGLE_FILE_NAME>.tar.gz"
+# with a matching .log and a .json metadata sidecar (read by the admin dashboard).
+SINGLE_FILE=1
+SINGLE_FILE_NAME="phansora-backup-latest"
 
 # Paths (relative to each dir being tarred) excluded from the code backup.
 # These are large and rebuildable; the source of truth is git + package files.
