@@ -31,6 +31,7 @@
 #   --skip-db          don't load the database dump
 #   --skip-volumes     don't restore docker named volumes
 #   --skip-certs       don't restore nginx / letsencrypt
+#   --skip-firewall    don't touch the firewall (default: open http/https)
 #   -h          this help
 
 set -u -o pipefail
@@ -45,6 +46,7 @@ WITH_CRON=0
 SKIP_DB=0
 SKIP_VOLUMES=0
 SKIP_CERTS=0
+SKIP_FIREWALL=0
 
 # ---- arg parsing (mix of short + long) -----------------------------------
 while [ $# -gt 0 ]; do
@@ -58,6 +60,7 @@ while [ $# -gt 0 ]; do
     --skip-db) SKIP_DB=1; shift ;;
     --skip-volumes) SKIP_VOLUMES=1; shift ;;
     --skip-certs) SKIP_CERTS=1; shift ;;
+    --skip-firewall) SKIP_FIREWALL=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -121,6 +124,7 @@ if [ "$DRY_RUN" -eq 0 ] && [ "$ASSUME_YES" -eq 0 ]; then
   [ "$SKIP_CERTS" -eq 0 ] && echo "  - $NGINX_DIR / $LETSENCRYPT_DIR   (config + TLS certs)"
   [ "$SKIP_DB" -eq 0 ]    && echo "  - the '$PG_CONTAINER' database   (loaded from dump)"
   echo "  - systemd units: $SYSTEMD_UNITS"
+  [ "$SKIP_FIREWALL" -eq 0 ] && echo "  - firewall: open http/https (ssh kept)"
   echo
   printf "Type 'restore' to proceed: "
   read -r reply
@@ -164,7 +168,7 @@ if [ -f "${SRC}/www.tar.gz" ] || [ "$DRY_RUN" -eq 1 ]; then
   # --strip-components=1 drops that name and lands the project folders
   # (phansora, phansora-api, ...) directly in this box's $WWW_DIR — robust even
   # if the source box used a different path (dev 'sites' vs prod 'www').
-  run "tar xzf '${SRC}/www.tar.gz' -C '$WWW_DIR' --strip-components=1"
+  run "tar xzf '${SRC}/www.tar.gz' -C '$WWW_DIR' --strip-components=1 --overwrite"
   ok "restored site code -> $WWW_DIR"
   echo "       note: reinstall excluded deps -> (cd $PHANSORA_DIR && npm ci); (cd $PHANSORA_API_DIR && python -m venv .venv && .venv/bin/pip install -r requirements.txt)"
 else
@@ -174,24 +178,57 @@ fi
 # ---------------------------------------------------------------------------
 # 3. nginx + TLS certs
 # ---------------------------------------------------------------------------
+log "--- [3/8] nginx + TLS certs + firewall"
+
+# nginx must be installed to serve the restored config (it's not in the backup).
+if command -v nginx >/dev/null 2>&1; then
+  ok "nginx is installed ($(nginx -v 2>&1 | sed 's/nginx version: //'))"
+else
+  warn "nginx is NOT installed — install it before starting the site (CentOS: 'dnf install nginx'; Debian: 'apt install nginx')"
+fi
+
+# Restore config + certs (unless --skip-certs).
 if [ "$SKIP_CERTS" -eq 0 ]; then
-  log "--- [3/8] nginx + TLS certs"
   if [ -f "${SRC}/nginx.tar.gz" ] || [ "$DRY_RUN" -eq 1 ]; then
     run "mkdir -p '$NGINX_DIR'"
-    run "tar xzf '${SRC}/nginx.tar.gz' -C '$NGINX_DIR' --strip-components=1"
+    run "tar xzf '${SRC}/nginx.tar.gz' -C '$NGINX_DIR' --strip-components=1 --overwrite"
     ok "restored $NGINX_DIR"
   else
     warn "nginx.tar.gz not in archive"
   fi
   if [ -f "${SRC}/letsencrypt.tar.gz" ] || [ "$DRY_RUN" -eq 1 ]; then
     run "mkdir -p '$LETSENCRYPT_DIR'"
-    run "tar xzf '${SRC}/letsencrypt.tar.gz' -C '$LETSENCRYPT_DIR' --strip-components=1"
+    run "tar xzf '${SRC}/letsencrypt.tar.gz' -C '$LETSENCRYPT_DIR' --strip-components=1 --overwrite"
     ok "restored $LETSENCRYPT_DIR"
   else
     warn "letsencrypt.tar.gz not in archive (no certs to restore)"
   fi
 else
-  log "--- [3/8] nginx + TLS certs  (skipped: --skip-certs)"
+  log "  config/cert restore skipped (--skip-certs)"
+fi
+
+# Open the firewall for web traffic so the site is actually reachable. SSH is
+# always (re)allowed first so a re-run can never lock you out. Idempotent.
+if [ "$SKIP_FIREWALL" -eq 0 ]; then
+  if command -v firewall-cmd >/dev/null 2>&1; then          # RHEL / CentOS -> firewalld
+    if firewall-cmd --state >/dev/null 2>&1; then
+      run "firewall-cmd --permanent --add-service=ssh   >/dev/null 2>&1 || true"
+      run "firewall-cmd --permanent --add-service=http  >/dev/null 2>&1 || true"
+      run "firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true"
+      run "firewall-cmd --reload >/dev/null 2>&1 || true"
+      ok "firewalld: opened http/https (ssh kept)"
+    else
+      warn "firewalld installed but not running — enable it (ssh is in the default zone) then open web: systemctl enable --now firewalld; firewall-cmd --permanent --add-service={http,https}; firewall-cmd --reload"
+    fi
+  elif command -v ufw >/dev/null 2>&1; then                 # Debian / Ubuntu -> ufw
+    run "ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true"
+    run "ufw allow 'Nginx Full' >/dev/null 2>&1 || ufw allow 80,443/tcp >/dev/null 2>&1 || true"
+    ok "ufw: allowed ssh + http/https"
+  else
+    warn "no firewalld/ufw detected — if a firewall is active, open ports 80 and 443 manually"
+  fi
+else
+  log "  firewall left untouched (--skip-firewall)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -240,8 +277,24 @@ if [ "$SKIP_DB" -eq 0 ] && command -v docker >/dev/null 2>&1; then
         sleep 2
       done
       if [ "$ready" -eq 1 ]; then
+        # Make the load idempotent (safe to re-run). On a second run the app is
+        # usually up and the DB already populated, which makes an object-level
+        # reload flaky. So: stop the app to drop its connections, then drop &
+        # recreate the target DB so the load always starts from empty.
+        run "(cd '$PHANSORA_DIR' && docker compose -f '$PHANSORA_COMPOSE' stop app >/dev/null 2>&1) || true"
+        if [ "$DB_NAME" != "postgres" ]; then
+          log "  recreating a clean database '$DB_NAME' (idempotent re-run)"
+          # Connect to the maintenance 'postgres' DB so we can drop the target.
+          # ON_ERROR_STOP=0 so ALTER on a not-yet-existing DB doesn't abort.
+          docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=0 -U "$DB_USER" -d postgres >/dev/null 2>&1 <<SQL || warn "  could not fully recreate '$DB_NAME' — falling back to the dump's --clean"
+ALTER DATABASE "$DB_NAME" WITH ALLOW_CONNECTIONS false;
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();
+DROP DATABASE IF EXISTS "$DB_NAME";
+CREATE DATABASE "$DB_NAME" OWNER "$DB_USER";
+SQL
+        fi
         log "  loading dump into db=$DB_NAME user=$DB_USER"
-        if gunzip -c "${SRC}/database.sql.gz" | docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=0 -U "$DB_USER" -d "$DB_NAME" >/dev/null; then
+        if gunzip -c "${SRC}/database.sql.gz" | docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=0 -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
           ok "database restored"
         else
           warn "psql load reported errors — review DB state"
@@ -325,12 +378,19 @@ log "=== Restore finished with $WARN_COUNT warning(s) ==="
 cat <<EOF
 
 Next steps to finish bringing the box online:
-  1. Reinstall app deps (excluded from backup to keep it small):
-       (cd $PHANSORA_DIR && npm ci)
-       (cd $PHANSORA_API_DIR && python -m venv .venv && .venv/bin/pip install -r requirements.txt)
-  2. Test nginx + reload:   nginx -t && systemctl reload nginx
-  3. Start the stack:       systemctl start $SYSTEMD_UNITS      (or re-run with --stack)
-  4. Point DNS at this box and verify https://www.phansora.com
+  1. Load the DB dump BEFORE starting the app, using the PROD compose
+     (restore.sh already did this if you didn't pass --skip-db). Then start
+     the app last so its migrations no-op:
+       (cd $PHANSORA_DIR && docker compose -f docker-compose.prod.yml up -d)
+     Verify:  docker exec -it $PG_CONTAINER psql -U <DB_USER> -d <DB_NAME> -c 'select count(*) from users;'
+  2. Frontend deps:  (cd $PHANSORA_DIR && npm ci)
+  3. API deps: build the venv with Python 3.10 (NOT plain 'python -m venv' —
+     CentOS 8 default is 3.6, torch wheels are cp310). See README section
+     "API on CentOS Stream 8":
+       uv venv --python 3.10 $PHANSORA_API_DIR/.venv && \
+         $PHANSORA_API_DIR/.venv/bin/pip install -r $PHANSORA_API_DIR/requirements.txt
+  4. Test nginx + reload:   nginx -t && systemctl reload nginx
+  5. Point DNS at this box and verify https://www.phansora.com
 EOF
 [ "$WARN_COUNT" -gt 0 ] && exit 1
 exit 0
