@@ -69,6 +69,11 @@ fi
 PHANSORA_DIR="${PHANSORA_DIR:-${WWW_DIR}/phansora}"
 PHANSORA_API_DIR="${PHANSORA_API_DIR:-${WWW_DIR}/phansora-api}"
 
+# Which directories under WWW_DIR to actually archive. We deliberately do NOT
+# tar the whole WWW_DIR tree — it can contain huge unrelated things (e.g. a
+# CosyVoice model checkout). Override PROJECT_DIRS in backup.conf to add more.
+PROJECT_DIRS="${PROJECT_DIRS:-${PHANSORA_DIR} ${PHANSORA_API_DIR}}"
+
 # ---------------------------------------------------------------------------
 # Setup: timestamped staging dir + logging
 # ---------------------------------------------------------------------------
@@ -119,23 +124,40 @@ EXCLUDE_ARGS=()
 for e in $EXCLUDES; do EXCLUDE_ARGS+=(--exclude="$e"); done
 
 # ---------------------------------------------------------------------------
-# 1. Site code (whole WWW_DIR tree, secrets included, heavy dirs excluded)
+# 1. Site code — ONLY the project dirs (secrets included, heavy dirs excluded).
+#    Packed relative to dirname(WWW_DIR) so members are 'www/phansora/...' etc.,
+#    matching what restore.sh expects (it extracts with --strip-components=1).
 # ---------------------------------------------------------------------------
-log "--- [1/8] Site code: $WWW_DIR"
-if [ -d "$WWW_DIR" ]; then
-  if tar czf "${WORK}/www.tar.gz" "${EXCLUDE_ARGS[@]}" \
-        -C "$(dirname "$WWW_DIR")" "$(basename "$WWW_DIR")"; then
-    ok "archived $WWW_DIR -> www.tar.gz ($(du -h "${WORK}/www.tar.gz" | cut -f1))"
+log "--- [1/8] Site code: ${PROJECT_DIRS}"
+WWW_PARENT="$(dirname "$WWW_DIR")"
+REL_DIRS=()
+for d in $PROJECT_DIRS; do
+  if [ ! -d "$d" ]; then
+    warn "project dir missing, skipping: $d"
+    continue
+  fi
+  # Path relative to WWW_PARENT (e.g. /var/www/phansora -> www/phansora).
+  rel="${d#"${WWW_PARENT}/"}"
+  if [ "$rel" = "$d" ]; then
+    warn "project dir '$d' is not under '$WWW_PARENT' — skipping (would break restore layout)"
+    continue
+  fi
+  REL_DIRS+=("$rel")
+done
+
+if [ "${#REL_DIRS[@]}" -gt 0 ]; then
+  if tar czf "${WORK}/www.tar.gz" "${EXCLUDE_ARGS[@]}" -C "$WWW_PARENT" "${REL_DIRS[@]}"; then
+    ok "archived ${REL_DIRS[*]} -> www.tar.gz ($(du -h "${WORK}/www.tar.gz" | cut -f1))"
     # Explicitly confirm the .env secret files came along — easy to lose these.
     # Both apps use a single .env (not .env.production / .env.local).
     for envf in "${PHANSORA_DIR}/.env" "${PHANSORA_API_DIR}/.env"; do
       [ -f "$envf" ] && ok "  captured secrets: $envf" || warn "  expected env file missing: $envf"
     done
   else
-    warn "tar of $WWW_DIR failed"
+    warn "tar of project dirs failed"
   fi
 else
-  warn "$WWW_DIR does not exist — nothing to archive (set WWW_DIR in backup.conf)"
+  warn "no project dirs to archive — check PROJECT_DIRS / WWW_DIR in backup.conf"
 fi
 
 # ---------------------------------------------------------------------------

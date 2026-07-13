@@ -5,8 +5,9 @@
 # --- What to back up -------------------------------------------------------
 
 # Root of the deployed site code. On prod this is /var/www; on the dev box the
-# apps live under /home/crimson/sites. The script backs up this whole tree
-# (minus the EXCLUDES below).
+# apps live under /home/crimson/sites. NOTE: the script does NOT tar this whole
+# tree — only the project dirs in PROJECT_DIRS below (WWW_DIR may hold huge
+# unrelated things like a CosyVoice model checkout).
 WWW_DIR="/var/www"
 
 # The two project subdirectories inside WWW_DIR. Used to locate each app's
@@ -14,6 +15,12 @@ WWW_DIR="/var/www"
 # layout differs (e.g. the api lives elsewhere).
 PHANSORA_DIR="${WWW_DIR}/phansora"
 PHANSORA_API_DIR="${WWW_DIR}/phansora-api"
+
+# Exactly which directories get archived into www.tar.gz. Defaults to the two
+# project dirs above — nothing else in WWW_DIR is included. Must live under
+# WWW_DIR's parent (they're packed relative to it so restore lays them back out
+# correctly). Add space-separated paths here to back up more.
+PROJECT_DIRS="${PHANSORA_DIR} ${PHANSORA_API_DIR}"
 
 # systemd unit files to grab (space separated, no path — they're looked up in
 # /etc/systemd/system and its drop-in dirs).

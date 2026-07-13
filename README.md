@@ -8,7 +8,7 @@ back up on fresh hardware.
 
 | # | Component | How | Why it matters |
 |---|-----------|-----|----------------|
-| 1 | Site code under `$WWW_DIR` (`phansora`, `phansora-api`) | `tar` | Includes the `.env` **secrets** (Google/Square keys, DB creds). Heavy rebuildable dirs like `node_modules`/`.venv` are excluded. |
+| 1 | Site code — only the project dirs `PROJECT_DIRS` (`phansora`, `phansora-api`), not all of `$WWW_DIR` | `tar` | Includes the `.env` **secrets** (Google/Square keys, DB creds). Heavy rebuildable dirs like `node_modules`/`.venv` are excluded, and unrelated trees under `$WWW_DIR` (e.g. a CosyVoice model checkout) are skipped entirely. |
 | 2 | **Postgres database** | `pg_dump` from the `phansora_postgres` container | The DB lives in a Docker **named volume**, not on disk — a plain `/var/www` tar silently misses it. This is the #1 thing people lose in a migration. |
 | 3 | Docker named volumes (e.g. `media`) | raw `tar` | User-uploaded / generated media that isn't in the code tree. |
 | 4 | systemd units `phansora.service`, `phansora-api.service` | copy + record enabled state and drop-ins | So the services come back up the same way. |
