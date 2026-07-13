@@ -7,7 +7,8 @@
 #   2. The Postgres database  (logical pg_dump from the running container —
 #      the data lives in a Docker named volume, so a file tar would miss it)
 #   3. Docker named volumes    (e.g. phansora-api "media")
-#   4. systemd unit files      (phansora.service, phansora-api.service)
+#   4. systemd unit files      (phansora / phansora-api / phansora-book-worker,
+#                               plus their .d drop-in dirs)
 #   5. nginx configuration     (/etc/nginx)
 #   6. TLS certificates        (/etc/letsencrypt — the site is HTTPS)
 #   7. Crontabs                (root + invoking user)
@@ -42,7 +43,7 @@ done
 WWW_DIR="/var/www"
 PHANSORA_DIR=""
 PHANSORA_API_DIR=""
-SYSTEMD_UNITS="phansora.service phansora-api.service"
+SYSTEMD_UNITS="phansora.service phansora-api.service phansora-book-worker.service"
 NGINX_DIR="/etc/nginx"
 LETSENCRYPT_DIR="/etc/letsencrypt"
 PG_CONTAINER="phansora_postgres"

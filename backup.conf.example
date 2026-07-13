@@ -23,8 +23,9 @@ PHANSORA_API_DIR="${WWW_DIR}/phansora-api"
 PROJECT_DIRS="${PHANSORA_DIR} ${PHANSORA_API_DIR}"
 
 # systemd unit files to grab (space separated, no path — they're looked up in
-# /etc/systemd/system and its drop-in dirs).
-SYSTEMD_UNITS="phansora.service phansora-api.service"
+# /etc/systemd/system and its drop-in dirs). Each unit's ".d" drop-in directory
+# (e.g. phansora-api.service.d) is captured automatically — no need to list it.
+SYSTEMD_UNITS="phansora.service phansora-api.service phansora-book-worker.service"
 
 # nginx and TLS certificate roots.
 NGINX_DIR="/etc/nginx"

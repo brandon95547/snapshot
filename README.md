@@ -11,7 +11,7 @@ back up on fresh hardware.
 | 1 | Site code — only the project dirs `PROJECT_DIRS` (`phansora`, `phansora-api`), not all of `$WWW_DIR` | `tar` | Includes the `.env` **secrets** (Google/Square keys, DB creds). Heavy rebuildable dirs like `node_modules`/`.venv` are excluded, and unrelated trees under `$WWW_DIR` (e.g. a CosyVoice model checkout) are skipped entirely. |
 | 2 | **Postgres database** | `pg_dump` from the `phansora_postgres` container | The DB lives in a Docker **named volume**, not on disk — a plain `/var/www` tar silently misses it. This is the #1 thing people lose in a migration. |
 | 3 | Docker named volumes (e.g. `media`) | raw `tar` | User-uploaded / generated media that isn't in the code tree. |
-| 4 | systemd units `phansora.service`, `phansora-api.service` | copy + record enabled state and drop-ins | So the services come back up the same way. |
+| 4 | systemd units `phansora.service`, `phansora-api.service`, `phansora-book-worker.service` | copy + record enabled state and drop-ins (e.g. `phansora-api.service.d`) | So the services come back up the same way. |
 | 5 | nginx config (`/etc/nginx`) | `tar` | Vhosts, proxy config, TLS wiring. |
 | 6 | TLS certs (`/etc/letsencrypt`) | `tar -h` (symlinks dereferenced) | Site is HTTPS; avoids a cold re-issue / rate-limit surprise. |
 | 7 | Crontabs (user + `/etc/cron.d`) | dump | Any other scheduled jobs on the box. |
