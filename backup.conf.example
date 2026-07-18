@@ -68,4 +68,12 @@ SINGLE_FILE_NAME="phansora-backup-latest"
 
 # Paths (relative to each dir being tarred) excluded from the code backup.
 # These are large and rebuildable; the source of truth is git + package files.
-EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt"
+#
+# Runtime data notes — what is deliberately dropped vs kept:
+#   dropped: hf-cache             HuggingFace model cache, re-downloads on use (~230M, the bulk of the archive)
+#   dropped: output_audio/_txt    generated TTS artifacts
+#   dropped: chrono_origin/cache  derived response cache, clearable from the admin panel
+#   KEPT:    voices/              user-uploaded voice-clone reference clips — UNRECOVERABLE if lost
+#   KEPT:    history/             per-user event logs (history/<user_id>/events.jsonl)
+#   KEPT:    dossier_nova/        embeddings.db (regenerable, but only at real cost)
+EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt hf-cache */data/chrono_origin/cache"

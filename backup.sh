@@ -52,7 +52,12 @@ DB_NAME=""
 VOLUME_MATCH="media"
 BACKUP_ROOT="/var/backups/phansora"
 RETENTION_DAYS=14
-EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt"
+# Derived/regenerable data — nothing here is source-of-truth, so it is dropped
+# to keep the archive small. Notably NOT excluded: voices/ (user-uploaded voice
+# clone reference clips — unrecoverable if lost) and history/ (per-user event
+# logs). hf-cache is the HuggingFace model download cache and is by far the
+# largest thing on the box (~230M); it re-fetches automatically on first use.
+EXCLUDES="node_modules .venv venv __pycache__ .pytest_cache .cache tmp .tmp_uploads output_audio output_txt hf-cache */data/chrono_origin/cache"
 # Overwrite mode: when 1, every run writes to ONE fixed archive (no timestamp),
 # replacing the previous one in place — so hourly backups never accumulate.
 # RETENTION_DAYS is irrelevant in this mode (there is only ever one file).
